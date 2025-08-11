@@ -3,6 +3,7 @@ import {Client} from 'pg';
 import dotenv from "dotenv";
 import jwt  from 'jsonwebtoken';
 import bcrypt from "bcrypt";
+import { UserAuth } from './middleware.js';
 dotenv.config();
 const app=express();
 app.use(express.json());
@@ -42,17 +43,17 @@ app.post("/user/signin", async function (req, res) {
         res.status(500).json({ message: "Internal server error" });
     }
 });
-app.get("/user/purchases",function(req,res){
+app.get("/user/purchases",UserAuth,function(req,res){
     res.json({
         message:"my purchases end point"
     })
 })
-app.get("/courses",function(req,res){
+app.get("/courses",UserAuth,function(req,res){
     res.json({
         message:"available courses end point"
     })
 })
-app.post("/course/purchase",function(req,res){
+app.post("/course/purchase",UserAuth,function(req,res){
     res.json({
         message:"make a purchase end point"
     })
