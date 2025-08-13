@@ -8,6 +8,7 @@ dotenv.config();
 const app=express();
 app.use(express.json());
 const pgClient = new Client({connectionString:process.env.BACKEND_URI})
+//sign in and sign up
 app.post("/user/signup",async function(req,res){
     const { full_name, password, email,role } = req.body;
     const password_hash=await bcrypt.hash(password,10);
@@ -47,11 +48,7 @@ app.post("/user/signin", async function (req, res) {
         res.status(500).json({ message: "Internal server error" });
         }
 });
-app.get("/user/purchases",UserAuth,function(req,res){
-    res.json({
-        message:"my purchases end point"
-    })
-})
+//courses crud
 app.get("/courses",UserAuth,async function(req,res){
     try{const data=await pgClient.query("SELECT * FROM courses ORDER BY created_at DESC");
     const courselist=data.rows;
@@ -82,6 +79,17 @@ app.get("/courses/:id",UserAuth,async function(req,res){
             message: "Failed to fetch courses",
             error: e.message
         });
+    }
+})
+app.post("/courses",InstructorAuth,async function(req,res){
+    try{
+    const {title,price}=req.body;
+    await pgClient.query("INSERT INTO courses (title, price, instructor_id) VALUES ($1, $2, $3)",[title, price, req.user_id]);
+    res.json({
+        message:"course added"
+    })}catch(e){
+        console.error("Error occured while adding course :",e);
+        res.status(500).json({ error: "Internal server error" });
     }
 })
 app.put("/courses/:id",InstructorAuth,async function(req,res){
@@ -118,17 +126,7 @@ app.delete("/courses/:id",InstructorAuth,async function(req,res){
             res.status(500).json({ error: "Internal server error" });
         }
 })
-app.post("/courses",InstructorAuth,async function(req,res){
-    try{
-    const {title,price}=req.body;
-    await pgClient.query("INSERT INTO courses (title, price, instructor_id) VALUES ($1, $2, $3)",[title, price, req.user_id]);
-    res.json({
-        message:"course added"
-    })}catch(e){
-        console.error("Error occured while adding course :",e);
-        res.status(500).json({ error: "Internal server error" });
-    }
-})
+//courses->lessons crud
 app.get("/courses/:courseId/lessons",UserAuth,async function(req,res){
     try{
     const data=await pgClient.query("SELECT * FROM lessons WHERE course_id=$1 ORDER BY position",[req.params.courseId]); 
@@ -236,6 +234,12 @@ app.delete("/lessons/:lessonid",InstructorAuth,async function(req,res){
         console.error("Error occurred while deleting lesson :",e);
         res.status(500).json({ message: "Error occurred while deleting lesson" });
     }
+})
+//purchases crud
+app.get("/user/purchases",UserAuth,function(req,res){
+    res.json({
+        message:"my purchases end point"
+    })
 })
 app.post("/course/purchase",UserAuth,function(req,res){
     res.json({
