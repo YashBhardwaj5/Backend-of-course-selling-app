@@ -4,33 +4,46 @@ import dotenv from "dotenv";
 import jwt  from 'jsonwebtoken';
 import bcrypt from "bcrypt";
 import { UserAuth,InstructorAuth } from './middleware.js';
+import { signupSchema, signinSchema } from "./validators.js";
 dotenv.config();
 const app=express();
 app.use(express.json());
 const pgClient = new Client({connectionString:process.env.BACKEND_URI})
 //sign in and sign up
-app.post("/user/signup",async function(req,res){
-    const { full_name, password, email,role } = req.body;
-    const password_hash=await bcrypt.hash(password,10);
-    try{await pgClient.query(
-          `INSERT INTO Users (full_name, password_hash, email,role) VALUES ($1, $2, $3,$4)`,[full_name, password_hash, email,role]);
-            res.status(201).json({
-            message:"signed up"
-        })}
-    catch(e){
-        console.error("Failed to sign up error:",e);
-        res.status(500).json({ message: "Signup failed" });
-    }
-})
+app.post("/user/signup", async function (req, res) {
+  const parseResult = signupSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return res.status(400).json({ errors: parseResult.error.errors });
+  }
+
+  const { full_name, email, password, role } = parseResult.data;
+
+  const password_hash = await bcrypt.hash(password, 10);
+
+  try {
+    await pgClient.query(
+      `INSERT INTO Users (full_name, password_hash, email, role) VALUES ($1, $2, $3, $4)`,
+      [full_name, password_hash, email, role]
+    );
+    res.status(201).json({ message: "signed up" });
+  } catch (e) {
+    console.error("Failed to sign up error:", e);
+    res.status(500).json({ message: "Signup failed" });
+  }
+});
+
 app.post("/user/signin", async function (req, res) {
     try {
-        const { email, password } = await req.body;
+        const parseResult = signinSchema.safeParse(req.body);
+        if (!parseResult.success) {
+            return res.status(400).json({ errors: parseResult.error.errors });
+        }
+        const { email, password } = parseResult.data;
         const data = await pgClient.query("SELECT * FROM Users WHERE email = $1", [email]);
         if (data.rows.length === 0) {
             return res.status(404).json({ message: "User not found" });
         }
         const user = data.rows[0];
-        console.log(user);
         const isMatch = await bcrypt.compare(password, user.password_hash);
         if (!isMatch) {
             return res.status(401).json({ message: "Wrong credentials" });
@@ -49,7 +62,7 @@ app.post("/user/signin", async function (req, res) {
         }
 });
 //courses crud
-app.get("/courses",UserAuth,async function(req,res){
+app.get("/courses",async function(req,res){
     try{const data=await pgClient.query("SELECT * FROM courses ORDER BY created_at DESC");
     const courselist=data.rows;
     res.json({
@@ -65,7 +78,7 @@ app.get("/courses",UserAuth,async function(req,res){
         });
     }
 })
-app.get("/courses/:id",UserAuth,async function(req,res){
+app.get("/courses/:id",async function(req,res){
     try{const data=await pgClient.query("SELECT * FROM courses where course_id=$1",[req.params.id]);
     const courselist=data.rows;
     res.json({
@@ -127,22 +140,36 @@ app.delete("/courses/:id",InstructorAuth,async function(req,res){
         }
 })
 //courses->lessons crud
-app.get("/courses/:courseId/lessons",UserAuth,async function(req,res){
-    try{
-    const data=await pgClient.query("SELECT * FROM lessons WHERE course_id=$1 ORDER BY position",[req.params.courseId]); 
-    const lessons=data.rows;
-    res.json({
-        message:"Lessons fetched successfully",
-        lessons:lessons
-    })
-    }catch(e){
-        console.error("Error occurred while fetching lessons",e);
-        res.status(500).json({
-            message:"Error occurred while fetching lessons",
-            error:e.message
-        })
+app.get("/courses/:courseId/lessons", UserAuth, async (req, res) => {
+  const { courseId } = req.params;
+  const userId = req.user_id;
+
+  const instructorCheck = await pgClient.query(
+    `SELECT instructor_id FROM courses WHERE course_id = $1`,
+    [courseId]
+  );
+
+  if (instructorCheck.rows.length === 0) {
+    return res.status(404).json({ message: "Course not found" });
+  }
+
+  if (instructorCheck.rows[0].instructor_id !== userId) {
+    const enrollmentCheck = await pgClient.query(
+      `SELECT enrollment_id FROM enrollments WHERE user_id = $1 AND course_id = $2`,
+      [userId, courseId]
+    );
+    if (enrollmentCheck.rows.length === 0) {
+      return res.status(403).json({ message: "Not authorized to view lessons" });
     }
-})
+  }
+
+  const lessons = await pgClient.query(
+    `SELECT * FROM lessons WHERE course_id = $1 ORDER BY position ASC`,
+    [courseId]
+  );
+  res.json({ lessons: lessons.rows });
+});
+
 app.get("/lessons/:lessonid",UserAuth,async function(req,res){
     try{
     const data=await pgClient.query("SELECT * FROM lessons WHERE lesson_id=$1",[req.params.lessonid]); 
@@ -236,16 +263,69 @@ app.delete("/lessons/:lessonid",InstructorAuth,async function(req,res){
     }
 })
 //purchases crud
-app.get("/user/purchases",UserAuth,function(req,res){
-    res.json({
-        message:"my purchases end point"
-    })
+app.post("/courses/:courseId/enroll",UserAuth,async function(req,res){
+    const courseId = req.params.courseId;
+    const userId = req.user_id;
+    try{
+        const courseCheck = await pgClient.query(
+            `SELECT course_id FROM courses WHERE course_id = $1`,
+            [courseId]
+        );
+        if (courseCheck.rows.length === 0) {
+            return res.status(404).json({ message: "Course not found" });
+        }
+        const existing = await pgClient.query(
+            `SELECT enrollment_id FROM enrollments WHERE user_id = $1 AND course_id = $2`,
+            [userId, courseId]
+        );
+        if (existing.rows.length > 0) {
+            return res.status(400).json({ message: "Already enrolled in this course" });
+        }
+        await pgClient.query(
+            `INSERT INTO enrollments (user_id, course_id) VALUES ($1, $2)`,
+            [userId, courseId]
+        );
+        res.json({
+            message:"Enrollment successful",
+            courseId
+        })
+    }catch(e){
+        console.error("Enrollment error:", e.message);
+        res.status(500).json({
+            message: "Enrollment error",
+            error: e.message
+        });
+    }
 })
-app.post("/course/purchase",UserAuth,function(req,res){
-    res.json({
-        message:"make a purchase end point"
-    })
-})
+app.get("/my-courses", UserAuth, async function (req, res) {
+    try {
+        const data = await pgClient.query(
+            `SELECT 
+                c.course_id, 
+                c.title, 
+                c.description, 
+                c.price, 
+                e.status, 
+                e.purchase_date
+             FROM enrollments e
+             JOIN courses c 
+                ON e.course_id = c.course_id
+             WHERE e.user_id = $1`,
+            [req.user_id]
+        );
+
+        res.json({
+            message: "Enrolled courses",
+            courses: data.rows
+        });
+    } catch (e) {
+        console.error("Error fetching enrolled courses:", e.message);
+        res.status(500).json({
+            message: "Error fetching enrolled courses",
+            error: e.message
+        });
+    }
+});
 const startServer = async () => {
     try {
         await pgClient.connect();
